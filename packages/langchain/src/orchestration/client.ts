@@ -380,8 +380,14 @@ export class OrchestrationClient extends BaseChatModel<
       // There can be only none or one choice inside a chunk
       const choice = orchestrationResult?.choices[0];
 
+      // Process token usage before mapping the chunk so usage_metadata is set in the constructor
+      const tokenUsage = chunk.getTokenUsage();
+
       // Map the chunk to a LangChain message chunk
-      const messageChunk = mapOrchestrationChunkToLangChainMessageChunk(chunk);
+      const messageChunk = mapOrchestrationChunkToLangChainMessageChunk(
+        chunk,
+        tokenUsage ?? undefined
+      );
 
       // Create initial generation info with token indices
       const newTokenIndices: NewTokenIndices = {
@@ -402,15 +408,8 @@ export class OrchestrationClient extends BaseChatModel<
         generationInfo.request_id = chunk._data.request_id;
       }
 
-      // Process token usage
-      const tokenUsage = chunk.getTokenUsage();
       if (tokenUsage) {
         generationInfo.token_usage = tokenUsage;
-        messageChunk.usage_metadata = {
-          input_tokens: tokenUsage.prompt_tokens,
-          output_tokens: tokenUsage.completion_tokens,
-          total_tokens: tokenUsage.total_tokens
-        };
       }
 
       const content = chunk.getDeltaContent() ?? '';

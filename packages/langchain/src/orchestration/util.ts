@@ -19,6 +19,7 @@ import type {
   FunctionObject,
   MessageToolCalls,
   SystemChatMessage,
+  TokenUsage,
   ToolChatMessage,
   UserChatMessage,
   TemplateRef,
@@ -264,6 +265,50 @@ function mapOrchestrationToLangChainToolCallChunk(
 }
 
 /**
+ * Maps {@link TokenUsage} to LangChain's UsageMetadata, including detailed token breakdowns
+ * for cache, reasoning, and audio tokens when available.
+ * @param usage - The token usage from the orchestration response.
+ * @returns The LangChain UsageMetadata object.
+ * @internal
+ */
+export function mapTokenUsageToUsageMetadata(usage: TokenUsage | undefined): {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  input_token_details?: Record<string, number>;
+  output_token_details?: Record<string, number>;
+} {
+  const inputTokenDetails: Record<string, number> = {};
+  if (usage?.prompt_tokens_details?.cached_tokens !== undefined) {
+    inputTokenDetails['cache_read'] = usage.prompt_tokens_details.cached_tokens;
+  }
+  if (usage?.prompt_tokens_details?.audio_tokens !== undefined) {
+    inputTokenDetails['audio'] = usage.prompt_tokens_details.audio_tokens;
+  }
+
+  const outputTokenDetails: Record<string, number> = {};
+  if (usage?.completion_tokens_details?.reasoning_tokens !== undefined) {
+    outputTokenDetails['reasoning'] =
+      usage.completion_tokens_details.reasoning_tokens;
+  }
+  if (usage?.completion_tokens_details?.audio_tokens !== undefined) {
+    outputTokenDetails['audio'] = usage.completion_tokens_details.audio_tokens;
+  }
+
+  return {
+    input_tokens: usage?.prompt_tokens ?? 0,
+    output_tokens: usage?.completion_tokens ?? 0,
+    total_tokens: usage?.total_tokens ?? 0,
+    ...(Object.keys(inputTokenDetails).length && {
+      input_token_details: inputTokenDetails
+    }),
+    ...(Object.keys(outputTokenDetails).length && {
+      output_token_details: outputTokenDetails
+    })
+  };
+}
+
+/**
  * Maps the completion response to a {@link ChatResult}.
  * @param completionResponse - The completion response to map.
  * @returns The mapped {@link ChatResult}.
@@ -283,11 +328,7 @@ export function mapOutputToChatResult(
         tool_calls: mapOrchestrationToLangChainToolCall(
           choice.message.tool_calls
         ),
-        usage_metadata: {
-          input_tokens: usage?.prompt_tokens ?? 0,
-          output_tokens: usage?.completion_tokens ?? 0,
-          total_tokens: usage?.total_tokens ?? 0
-        }
+        usage_metadata: mapTokenUsageToUsageMetadata(usage)
       }),
       additional_kwargs: {
         tool_calls: choice.message.tool_calls,
@@ -338,7 +379,8 @@ export function isToolDefinitionLike(
  * @internal
  */
 export function mapOrchestrationChunkToLangChainMessageChunk(
-  chunk: OrchestrationStreamChunkResponse
+  chunk: OrchestrationStreamChunkResponse,
+  tokenUsage?: TokenUsage
 ): AIMessageChunk {
   const choice = chunk._data.final_result?.choices[0];
   const content = chunk.getDeltaContent() ?? '';
@@ -351,6 +393,9 @@ export function mapOrchestrationChunkToLangChainMessageChunk(
     },
     ...(toolCallChunks && {
       tool_call_chunks: mapOrchestrationToLangChainToolCallChunk(toolCallChunks)
+    }),
+    ...(tokenUsage && {
+      usage_metadata: mapTokenUsageToUsageMetadata(tokenUsage)
     })
   });
 }

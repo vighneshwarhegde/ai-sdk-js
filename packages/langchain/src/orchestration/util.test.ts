@@ -16,6 +16,7 @@ import {
   mapLangChainMessagesToOrchestrationMessages,
   mapOutputToChatResult,
   mapOrchestrationChunkToLangChainMessageChunk,
+  mapTokenUsageToUsageMetadata,
   mapToolToOrchestrationFunction
 } from './util.js';
 import type { OrchestrationMessage } from './orchestration-message.js';
@@ -275,6 +276,44 @@ describe('mapOutputToChatResult', () => {
       }
     ]);
   });
+
+  it('should include input_token_details and output_token_details in usage_metadata', () => {
+    const completionResponse: CompletionPostResponse = {
+      final_result: {
+        id: 'test-id',
+        object: 'chat.completion',
+        created: 1634840000,
+        model: 'test-model',
+        choices: [
+          {
+            message: { content: 'Test', role: 'assistant' },
+            finish_reason: 'stop',
+            index: 0
+          }
+        ],
+        usage: {
+          completion_tokens: 10,
+          prompt_tokens: 20,
+          total_tokens: 30,
+          prompt_tokens_details: { cached_tokens: 8, audio_tokens: 2 },
+          completion_tokens_details: { reasoning_tokens: 4, audio_tokens: 1 }
+        }
+      },
+      request_id: 'req-123',
+      intermediate_results: {}
+    };
+
+    const result = mapOutputToChatResult(completionResponse);
+    const message = result.generations[0].message as AIMessage;
+
+    expect(message.usage_metadata).toEqual({
+      input_tokens: 20,
+      output_tokens: 10,
+      total_tokens: 30,
+      input_token_details: { cache_read: 8, audio: 2 },
+      output_token_details: { reasoning: 4, audio: 1 }
+    });
+  });
 });
 
 describe('mapToolToOrchestrationFunction', () => {
@@ -431,5 +470,126 @@ describe('mapOrchestrationChunkToLangChainMessageChunk', () => {
     };
     expect(result.tool_call_chunks?.[0]).toEqual(expectedToolCallChunk);
     expect(result).toMatchSnapshot('AIMessageChunk with tool call chunks');
+  });
+
+  it('should include usage_metadata when tokenUsage is provided', () => {
+    const tokenUsage = {
+      completion_tokens: 10,
+      prompt_tokens: 20,
+      total_tokens: 30
+    };
+    const mockChunk = createMockChunk('Hello', undefined, undefined, tokenUsage);
+    const result = mapOrchestrationChunkToLangChainMessageChunk(
+      mockChunk,
+      tokenUsage
+    );
+
+    expect(result.usage_metadata).toEqual({
+      input_tokens: 20,
+      output_tokens: 10,
+      total_tokens: 30
+    });
+  });
+
+  it('should include input_token_details and output_token_details when token details are present', () => {
+    const tokenUsage = {
+      completion_tokens: 10,
+      prompt_tokens: 20,
+      total_tokens: 30,
+      prompt_tokens_details: { cached_tokens: 5, audio_tokens: 2 },
+      completion_tokens_details: { reasoning_tokens: 3, audio_tokens: 1 }
+    };
+    const mockChunk = createMockChunk('Hello', undefined, undefined, {
+      completion_tokens: 10,
+      prompt_tokens: 20,
+      total_tokens: 30
+    });
+    const result = mapOrchestrationChunkToLangChainMessageChunk(
+      mockChunk,
+      tokenUsage
+    );
+
+    expect(result.usage_metadata).toEqual({
+      input_tokens: 20,
+      output_tokens: 10,
+      total_tokens: 30,
+      input_token_details: { cache_read: 5, audio: 2 },
+      output_token_details: { reasoning: 3, audio: 1 }
+    });
+  });
+
+  it('should not include usage_metadata when tokenUsage is not provided', () => {
+    const mockChunk = createMockChunk('Hello');
+    const result = mapOrchestrationChunkToLangChainMessageChunk(mockChunk);
+
+    expect(result.usage_metadata).toBeUndefined();
+  });
+});
+
+describe('mapTokenUsageToUsageMetadata', () => {
+  it('should map basic token counts', () => {
+    const result = mapTokenUsageToUsageMetadata({
+      prompt_tokens: 20,
+      completion_tokens: 10,
+      total_tokens: 30
+    });
+
+    expect(result).toEqual({
+      input_tokens: 20,
+      output_tokens: 10,
+      total_tokens: 30
+    });
+  });
+
+  it('should map cached_tokens to input_token_details.cache_read', () => {
+    const result = mapTokenUsageToUsageMetadata({
+      prompt_tokens: 20,
+      completion_tokens: 10,
+      total_tokens: 30,
+      prompt_tokens_details: { cached_tokens: 8 }
+    });
+
+    expect(result.input_token_details).toEqual({ cache_read: 8 });
+    expect(result.output_token_details).toBeUndefined();
+  });
+
+  it('should map reasoning_tokens to output_token_details.reasoning', () => {
+    const result = mapTokenUsageToUsageMetadata({
+      prompt_tokens: 20,
+      completion_tokens: 10,
+      total_tokens: 30,
+      completion_tokens_details: { reasoning_tokens: 4 }
+    });
+
+    expect(result.output_token_details).toEqual({ reasoning: 4 });
+    expect(result.input_token_details).toBeUndefined();
+  });
+
+  it('should map all token detail fields together', () => {
+    const result = mapTokenUsageToUsageMetadata({
+      prompt_tokens: 20,
+      completion_tokens: 10,
+      total_tokens: 30,
+      prompt_tokens_details: { cached_tokens: 5, audio_tokens: 2 },
+      completion_tokens_details: { reasoning_tokens: 3, audio_tokens: 1 }
+    });
+
+    expect(result).toEqual({
+      input_tokens: 20,
+      output_tokens: 10,
+      total_tokens: 30,
+      input_token_details: { cache_read: 5, audio: 2 },
+      output_token_details: { reasoning: 3, audio: 1 }
+    });
+  });
+
+  it('should return zero counts when usage is undefined', () => {
+    const result = mapTokenUsageToUsageMetadata(undefined);
+
+    expect(result).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0
+    });
   });
 });
